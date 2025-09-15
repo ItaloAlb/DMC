@@ -6,10 +6,10 @@ int main()
 {
     DMC dmc(1000, 2);
 
-    const int nSteps = 100000;   // passos totais desejados
-    const int equilSteps = 10000;      // passos para equilibrar (em steps)
-    const int BLOCK = 1000;       // tamanho do bloco (em steps)
-    const int WINDOW = 1000;       // janela da média móvel (em blocos)
+    const int nSteps = 1'000'000;   // passos totais desejados
+    const int equilSteps = 10'000;      // passos para equilibrar (em steps)
+    const int BLOCK = 1'000;       // tamanho do bloco (em steps)
+    const int WINDOW = 1'000;       // janela da média móvel (em blocos)
     const double HARTREE_TO_EV = 27.211386245988;
 
     const int equilBlocks = (equilSteps + BLOCK - 1) / BLOCK;

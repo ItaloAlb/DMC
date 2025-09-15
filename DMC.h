@@ -42,7 +42,7 @@ class DMC {
     private:
         int nWalkers, nParticles, dim;
 
-        double maxLocalEnergy, minLocalEnergy, lastStepEnergy, refEnergy, a, b;
+        double maxLocalEnergy, minLocalEnergy, lastStepEnergy, refEnergy, a, b, c1, c2, c3;
 
         Walker walkers[MAX_N_WALKERS];
 

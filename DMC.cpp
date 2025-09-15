@@ -24,6 +24,9 @@ DMC::DMC(int nWalkers_, int nParticles_, int dim_)
 {
 	a = -0.5;
 	b = 0.5;
+	c1 = 0.25;
+	c2 = 0.2;
+	c3 = 1.00078125;
 
 	initializeWalkers();
 }
@@ -259,35 +262,71 @@ double DMC::jastrowGradSquared(int i) {
 //	return - 1 / r;
 //}
 
+//double DMC::potentialEnergy(int i) {
+//	const double eps = 1e-8;
+//	auto& position = walkers[i].position;
+//
+//	double V = 0.0;
+//
+//	for (int p = 0; p < nParticles; ++p) {
+//		double xp = position[2 * p];
+//		double yp = position[2 * p + 1];
+//
+//		for (int q = p + 1; q < nParticles; ++q) {
+//			double dx = xp - position[2 * q];
+//			double dy = yp - position[2 * q + 1];
+//			double r2 = dx * dx + dy * dy;
+//			double r = std::sqrt(r2);
+//			if (r < eps) r = eps;
+//
+//			V += -1.0 / r;
+//		}
+//	}
+//
+//	return V;
+//}
+
 double DMC::potentialEnergy(int i) {
-	const double eps = 1e-8;
-	auto& position = walkers[i].position;
+	constexpr double eps2 = 1e-16;
+	const auto& position = walkers[i].position;
 
-	double V = 0.0;
+	const double dx = position[0] - position[2];
+	const double dy = position[1] - position[3];
+	const double r = std::sqrt(dx * dx + dy * dy + eps2);
 
-	for (int p = 0; p < nParticles; ++p) {
-		double xp = position[2 * p];
-		double yp = position[2 * p + 1];
+	double gamma = 0.577;
+	double r0 = 27.116;
 
-		for (int q = p + 1; q < nParticles; ++q) {
-			double dx = xp - position[2 * q];
-			double dy = yp - position[2 * q + 1];
-			double r2 = dx * dx + dy * dy;
-			double r = std::sqrt(r2);
-			if (r < eps) r = eps;
-
-			V += -1.0 / r;
-		}
-	}
-
-	return V;
+	//return - 1.0 / r;
+	return -1 / r0 * (std::log(r / (r + r0)) + (gamma - std::log(2)) * std::exp(- r / r0));
 }
 
+//void DMC::updateLocalEnergy(int i) {
+//	walkers[i].oldLocalEnergy = walkers[i].localEnergy;
+//	walkers[i].localEnergy = - 0.5 * (jastrowLaplacian(i) - jastrowGradSquared(i)) + potentialEnergy(i);
+//}
 
 void DMC::updateLocalEnergy(int i) {
 	walkers[i].oldLocalEnergy = walkers[i].localEnergy;
-	walkers[i].localEnergy = - 0.5 * (jastrowLaplacian(i) - jastrowGradSquared(i)) + potentialEnergy(i);
+
+	double dx = walkers[i].position[0] - walkers[i].position[2];
+	double dy = walkers[i].position[1] - walkers[i].position[3];
+	double r2 = dx * dx + dy * dy;
+	double r = std::sqrt(r2);
+	double logr = std::log(r);
+
+	double expmc2 = std::exp(-c2 * r2);
+	double exppc2 = std::exp(c2 * r2);
+
+	double u = c1 * r2 * logr * expmc2 - c3 * r * (1 - expmc2);
+
+	double u1 = expmc2 * (c1 * r - c3 * (exppc2 + 2 * c2 * r2 - 1) + 2 * c1 * r * (1 - c2 * r2) * logr);
+
+	double u2 = expmc2 * (c1 * (3 - 4 * c2 * r2) + 2 * c2 * c3 * r * (2 * c2 * r2 - 3) + 2 * c1 * (1 - 5 * c2 * r2 + 2 * c2 * c2 * r2 * r2) * logr);
+
+	walkers[i].localEnergy = u2 + u1 / r + u1 * u1 + potentialEnergy(i);
 }
+
 
 //void DMC::updateDrift(int i) {
 //	double dx = walkers[i].position[0] - 0;
@@ -303,30 +342,56 @@ void DMC::updateLocalEnergy(int i) {
 //	walkers[i].drift[1] = factor * dy;
 //}
 
+//void DMC::updateDrift(int i) {
+//	constexpr double eps = 1e-12;
+//	auto& position = walkers[i].position;
+//	auto& drift = walkers[i].drift;
+//	std::fill(walkers[i].drift.begin(), walkers[i].drift.end(), 0.0);
+//
+//	for (int k = 0; k < nParticles; ++k) {
+//		for (int m = k + 1; m < nParticles; ++m) {
+//			double dx = position[2 * k] - position[2 * m];
+//			double dy = position[2 * k + 1] - position[2 * m + 1];
+//			double r2 = dx * dx + dy * dy;
+//			double r = std::sqrt(r2 < eps ? eps : r2);
+//			double t = 1.0 + b * r;
+//			double fac = a / (r * t * t);
+//
+//			double fx = fac * dx;
+//			double fy = fac * dy;
+//
+//			drift[2 * k] += fx;
+//			drift[2 * k + 1] += fy;
+//			drift[2 * m] -= fx;
+//			drift[2 * m + 1] -= fy;
+//		}
+//	}
+//}
+
 void DMC::updateDrift(int i) {
-	constexpr double eps = 1e-12;
+	constexpr double eps2 = 1e-16;
 	auto& position = walkers[i].position;
 	auto& drift = walkers[i].drift;
-	std::fill(walkers[i].drift.begin(), walkers[i].drift.end(), 0.0);
 
-	for (int k = 0; k < nParticles; ++k) {
-		for (int m = k + 1; m < nParticles; ++m) {
-			double dx = position[2 * k] - position[2 * m];
-			double dy = position[2 * k + 1] - position[2 * m + 1];
-			double r2 = dx * dx + dy * dy;
-			double r = std::sqrt(r2 < eps ? eps : r2);
-			double t = 1.0 + b * r;
-			double fac = a / (r * t * t);
+	const double dx = position[0] - position[2];
+	const double dy = position[1] - position[3];
+	const double r2 = dx * dx + dy * dy + eps2;
+	const double r = std::sqrt(r2);
+	double logr = std::log(r);
 
-			double fx = fac * dx;
-			double fy = fac * dy;
+	double expmc2 = std::exp(-c2 * r2);
+	double exppc2 = std::exp(c2 * r2);
 
-			drift[2 * k] += fx;
-			drift[2 * k + 1] += fy;
-			drift[2 * m] -= fx;
-			drift[2 * m + 1] -= fy;
-		}
-	}
+	double u1 = expmc2 * (c1 * r - c3 * (exppc2 + 2 * c2 * r2 - 1) + 2 * c1 * r * (1 - c2 * r2) * logr);
+
+	const double fx = u1 / r * dx;
+	const double fy = u1 / r * dy;
+
+	drift[0] = fx;
+	drift[1] = fy;
+
+	drift[2] = -fx;
+	drift[3] = -fy;
 }
 
 void DMC::timeStep() {
