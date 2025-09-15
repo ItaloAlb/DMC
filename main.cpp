@@ -4,37 +4,67 @@
 
 int main()
 {
-    DMC dmc(5000, 2, 2); // 2000 walkers, 2 partículas, 2D
+    DMC dmc(1000, 2);
 
-    int nSteps = 100000;
-    int equilSteps = 10000;
+    const int nSteps = 100000;   // passos totais desejados
+    const int equilSteps = 10000;      // passos para equilibrar (em steps)
+    const int BLOCK = 1000;       // tamanho do bloco (em steps)
+    const int WINDOW = 1000;       // janela da média móvel (em blocos)
+    const double HARTREE_TO_EV = 27.211386245988;
 
-    double sumAvg = 0.0;
-    int navg = 0;
+    const int equilBlocks = (equilSteps + BLOCK - 1) / BLOCK;
 
-    std::ofstream fout("dmc_output.dat");
+    std::vector<double> win(WINDOW, 0.0);
+    int head = 0;
+    int filled = 0;
+    double sumWin = 0.0;
 
-    for (int step = 0; step < nSteps; ++step) {
-        dmc.timeStep();
+    std::ofstream fout("dmc.dat");
+    fout << "# time  E(Ha)  <E>(Ha)  <E>(eV)\n";
 
-        double vbar = dmc.meanLocalEnergy();  // energia média local no passo atual
-        double avg = 0.0;
+    int stepDone = 0;
+    int blockCount = 0;
 
-        if (step >= equilSteps) {
-            sumAvg += vbar;
-            ++navg;
-            avg = sumAvg / navg;
+    while (stepDone < nSteps) {
+        const int nBlockStep = std::min(BLOCK, nSteps - stepDone);
+
+        dmc.blockStep(nBlockStep);
+
+        stepDone += nBlockStep;
+        ++blockCount;
+
+        const double E_inst = dmc.meanLocalEnergy();
+
+        if (blockCount > equilBlocks) {
+            if (filled == WINDOW) {
+                sumWin -= win[head]; 
+            }
+            else {
+                ++filled;
+            }
+            win[head] = E_inst;
+            sumWin += E_inst;
+            head = (head + 1) % WINDOW;
         }
 
-        if (step % 20 == 0) {
-            double time = step * TAU;
+        const double E_mean = (filled > 0 ? sumWin / filled : 0.0);
 
-            fout << time << " " << vbar << " " << avg * 27.2114 << "\n";
+        const double time = stepDone * TAU;
+
+        if (blockCount % 1 == 0) {
+            fout << time << " "
+                << E_inst << " "
+                << E_mean << " "
+                << (E_mean * HARTREE_TO_EV) << "\n";
             fout.flush();
         }
 
-        if (step % 100 == 0) {
-            std::cout << "[Step " << step << "]  E_local = " << vbar << "\n";
+        if (blockCount % 10 == 0) {
+            std::cout << "[Block " << blockCount << " | steps " << stepDone << "]  "
+                << " E_inst (Hartree) = " <<       E_inst
+                << " | <E> (Hartree) = " << E_mean
+                << " | <E> (eV) = " <<    (E_mean * HARTREE_TO_EV) 
+                << " | n Walkers = " << dmc.getNumberWalkers() << "\n";
         }
     }
 

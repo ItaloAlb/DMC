@@ -13,7 +13,7 @@ void gauss(double& g1, double& g2) {
 }
 
 Walker::Walker(int nParticles, int dim)
-    : isAlive(true), localEnergy(0.0)
+    : isAlive(true), localEnergy(0.0), oldLocalEnergy(0.0)
 {
     position.resize(nParticles * dim, 0.0);
 	drift.resize(nParticles * dim, 0.0);
@@ -22,14 +22,7 @@ Walker::Walker(int nParticles, int dim)
 DMC::DMC(int nWalkers_, int nParticles_, int dim_)
 	: nWalkers(nWalkers_), nParticles(nParticles_), dim(dim_)
 {
-	particles.resize(nParticles);
-	particles[0].mass = ELECTRON_MASS;
-	particles[0].charge = ELECTRON_CHARGE;
-
-	particles[1].mass = HOLE_MASS;
-	particles[1].charge = HOLE_CHARGE;
-
-	a = -1.0;
+	a = -0.5;
 	b = 0.5;
 
 	initializeWalkers();
@@ -70,198 +63,270 @@ void DMC::initializeWalkers() {
 
 		updateDrift(i);
 		updateLocalEnergy(i);
+		updateReferenceEnergy();
 	}
-}
-
-void DMC::walk() {
-	int idx = 0;
-	for (int i = 0; i < nWalkers; ++i) {
-		if (walkers[i].isAlive) {
-			for (int j = 0; j < nParticles; ++j) {
-				double g1, g2;
-				gauss(g1, g2);
-				int k = dim * j;
-
-				double m = particles[j].mass;
-
-				walkers[i].position[k + 0] += walkers[i].drift[k + 0] * TAU + g1 * SQRT_TAU;
-				walkers[i].position[k + 1] += walkers[i].drift[k + 1] * TAU + g2 * SQRT_TAU;
-			}
-
-			updateDrift(i);
-			updateLocalEnergy(i);
-
-			if (i != idx)
-				walkers[idx] = walkers[i];
-			++idx;
-		}
-	}
-	nWalkers = idx;
 }
 
 //void DMC::walk() {
 //	int idx = 0;
-//	std::uniform_real_distribution<double> uniform_dist(0.0, 1.0);
-//
 //	for (int i = 0; i < nWalkers; ++i) {
-//		if (!walkers[i].isAlive) continue;
-//
-//		walkers[i].oldPosition = walkers[i].position;
-//		walkers[i].oldLocalEnergy = walkers[i].localEnergy;
-//		std::vector<double> oldDrift = walkers[i].drift;
-//
-//		double oldPsi = trialWaveFunction(i);
-//
-//		for (int j = 0; j < nParticles; ++j) {
+//		if (walkers[i].isAlive) {
 //			double g1, g2;
 //			gauss(g1, g2);
-//			int k = dim * j;
 //
-//			walkers[i].position[k + 0] += walkers[i].drift[k + 0] * TAU + g1 * SQRT_TAU;
-//			walkers[i].position[k + 1] += walkers[i].drift[k + 1] * TAU + g2 * SQRT_TAU;
-//		}
+//			walkers[i].position[0] += walkers[i].drift[0] * TAU + g1 * SQRT_TAU;
+//			walkers[i].position[1] += walkers[i].drift[1] * TAU + g2 * SQRT_TAU;
 //
-//		updateDrift(i);
-//		double newPsi = trialWaveFunction(i);
-//
-//		double greenRatio = 1.0;
-//		{
-//			double forward = 0.0;
-//			double backward = 0.0;
-//			for (int j = 0; j < nParticles * dim; ++j) {
-//				double deltaF = walkers[i].position[j] - walkers[i].oldPosition[j] - TAU * oldDrift[j];
-//				forward += deltaF * deltaF;
-//
-//				double deltaB = walkers[i].oldPosition[j] - walkers[i].position[j] - TAU * walkers[i].drift[j];
-//				backward += deltaB * deltaB;
-//			}
-//
-//			forward = std::exp(-forward / (2.0 * TAU));
-//			backward = std::exp(-backward / (2.0 * TAU));
-//			greenRatio = backward / forward;
-//		}
-//
-//		double W = (newPsi * newPsi) / (oldPsi * oldPsi) * greenRatio;
-//
-//		double u = uniform_dist(rng);
-//		if (u < std::min(1.0, W)) {
+//			updateDrift(i);
 //			updateLocalEnergy(i);
-//		}
-//		else {
-//			walkers[i].position = walkers[i].oldPosition;
-//			walkers[i].drift = oldDrift;
-//		}
-//		if (i != idx) walkers[idx] = walkers[i];
-//		++idx;
-//	}
 //
+//			if (i != idx)
+//				walkers[idx] = walkers[i];
+//			++idx;
+//		}
+//	}
 //	nWalkers = idx;
 //}
+
+void DMC::walk() {
+	int idx = 0;
+	for (int i = 0; i < nWalkers; ++i) {
+		if (!walkers[i].isAlive) continue;
+
+		for (int k = 0; k < nParticles; ++k) {
+			double g1, g2;
+			gauss(g1, g2);
+
+			int ix = 2 * k;
+			int iy = ix + 1;
+
+			walkers[i].position[ix] += walkers[i].drift[ix] * TAU + g1 * SQRT_TAU;
+			walkers[i].position[iy] += walkers[i].drift[iy] * TAU + g2 * SQRT_TAU;
+		}
+
+		updateDrift(i);
+		updateLocalEnergy(i);
+
+		if (i != idx) walkers[idx] = walkers[i];
+		++idx;
+	}
+	nWalkers = idx;
+}
 
 void DMC::branch() {
 	int nBirth = 0;
 	std::uniform_real_distribution<double> uniform_dist(0.0, 1.0);
-	double refEnergy = referenceEnergy();
 
+	double stepEnergy = 0.0;
+	double weight = 0.0;
+	
 	for (int i = 0; i < nWalkers; i++) {
+		const double PB = std::exp(-TAU * (0.5 * (walkers[i].oldLocalEnergy + walkers[i].localEnergy) - refEnergy));
+
+		stepEnergy += PB * walkers[i].localEnergy;
+		weight += PB;
+
+		const double u = uniform_dist(rng);
+
+		const int nCopies = static_cast<int>(std::floor(PB + u));
+
+		if (nCopies <= 0) {
+			walkers[i].isAlive = false;
+			continue;
+		}
+
+		for (int c = 1; c < nCopies; c++) {
+			if (nWalkers + nBirth >= MAX_N_WALKERS) break;
+			walkers[nWalkers + nBirth] = walkers[i];
+			nBirth++;
+		}
+
 		if (walkers[i].localEnergy > maxLocalEnergy) { maxLocalEnergy = walkers[i].localEnergy;}
 
 		if (walkers[i].localEnergy < minLocalEnergy) { minLocalEnergy = walkers[i].localEnergy;}
 
-		double rBirth = uniform_dist(rng);
-		double rDeath = uniform_dist(rng);
-		if (walkers[i].localEnergy < refEnergy && rBirth < (refEnergy - walkers[i].localEnergy) * TAU) {
-			if (nWalkers + nBirth < MAX_N_WALKERS) {
-				walkers[nWalkers + nBirth] = walkers[i];
-				nBirth++;
-			}
-		}
+		//double rBirth = uniform_dist(rng);
+		//double rDeath = uniform_dist(rng);
+		//if (walkers[i].localEnergy < refEnergy && rBirth < (refEnergy - walkers[i].localEnergy) * TAU) {
+		//	if (nWalkers + nBirth < MAX_N_WALKERS) {
+		//		walkers[nWalkers + nBirth] = walkers[i];
+		//		nBirth++;
+		//	}
+		//}
 
-		else if (walkers[i].localEnergy > refEnergy && rDeath < (walkers[i].localEnergy - refEnergy) * TAU) {
-			walkers[i].isAlive = false;
-		}
+		//else if (walkers[i].localEnergy > refEnergy && rDeath < (walkers[i].localEnergy - refEnergy) * TAU) {
+		//	walkers[i].isAlive = false;
+		//}
 	}
 	nWalkers += nBirth;
+	lastStepEnergy = stepEnergy / weight;
 }
 
-//void DMC::branch() {
-//	int nBirth = 0;
-//	std::uniform_real_distribution<double> uniform_dist(0.0, 1.0);
-//	double refEnergy = referenceEnergy();
+//double DMC::jastrowLaplacian(int i) {
+//	double x1 = walkers[i].position[0];
+//	double y1 = walkers[i].position[1];
 //
-//	for (int i = 0; i < nWalkers; ++i) {
-//		if (!walkers[i].isAlive) continue;
+//	double r = std::sqrt(x1 * x1 + y1 * y1);
+//	if (r < 1e-8) r = 1e-8;
 //
-//		double E_old = walkers[i].oldLocalEnergy;
-//		double E_new = walkers[i].localEnergy;
-//
-//		double PB = std::exp(-TAU * (0.5 * (E_old + E_new) - refEnergy));
-//		int nCopies = static_cast<int>(PB + uniform_dist(rng));
-//
-//		if (nCopies == 0) {
-//			walkers[i].isAlive = false;
-//		}
-//		else {
-//			for (int c = 1; c < nCopies && nWalkers + nBirth < MAX_N_WALKERS; ++c) {
-//				walkers[nWalkers + nBirth] = walkers[i];
-//				++nBirth;
-//			}
-//		}
-//	}
-//
-//	nWalkers += nBirth;
+//	double lap = (a - a * b * r) / (r * std::pow(1.0 + b * r, 3));
+//	return lap;
 //}
 
 double DMC::jastrowLaplacian(int i) {
-	double x1 = walkers[i].position[0];
-	double y1 = walkers[i].position[1];
-	double x2 = walkers[i].position[2];
-	double y2 = walkers[i].position[3];
+	Walker& currentWalker = walkers[i];
 
-	double dx = x1 - x2;
-	double dy = y1 - y2;
-	double r2 = dx * dx + dy * dy;
-	double r = sqrt(r2);
-	if (r < 1e-8) r = 1e-8;
+	int nParticles = currentWalker.position.size() / 2;
 
-	double br = b * r;
-	double denom2 = (1.0 + br) * (1.0 + br);
-	double denom3 = denom2 * (1.0 + br);
+	double laplacian = 0.0;
 
-	double lap = 2.0 * a * (1.0 / (r * denom2) - 2.0 * b / denom3);
-	return lap;
+	for (int k = 0; k < nParticles; ++k) {
+		int k_idx_x = k * 2;
+		int k_idx_y = k * 2 + 1;
+
+		for (int m = 0; m < nParticles; ++m) {
+			if (m == k) {
+				continue;
+			}
+
+			int m_idx_x = m * 2;
+			int m_idx_y = m * 2 + 1;
+
+			double dx_mk = currentWalker.position[k_idx_x] - currentWalker.position[m_idx_x];
+			double dy_mk = currentWalker.position[k_idx_y] - currentWalker.position[m_idx_y];
+
+			double r2_mk = dx_mk * dx_mk + dy_mk * dy_mk;
+			double r_mk = std::sqrt(r2_mk);
+
+			if (r_mk < 1e-8) {
+				r_mk = 1e-8;
+			}
+
+			double term = (this->a * (1.0 - this->b * r_mk)) / (r_mk * std::pow(1.0 + this->b * r_mk, 3));
+			laplacian += term;
+		}
+	}
+	return laplacian;
 }
 
+double DMC::jastrowGradSquared(int i) {
+	double gradSquared = 0.0;
+
+	for (int k = 0; k < nParticles; ++k) {
+		double grad_x_k = 0.0;
+		double grad_y_k = 0.0;
+
+		int k_idx_x = k * 2;
+		int k_idx_y = k * 2 + 1;
+
+		for (int m = 0; m < nParticles; ++m) {
+
+			if (m == k) {
+				continue;
+			}
+
+			int m_idx_x = m * 2;
+			int m_idx_y = m * 2 + 1;
+
+			double dx_mk = walkers[i].position[k_idx_x] - walkers[i].position[m_idx_x];
+			double dy_mk = walkers[i].position[k_idx_y] - walkers[i].position[m_idx_y];
+
+			double r2_mk = dx_mk * dx_mk + dy_mk * dy_mk;
+			double r_mk = std::sqrt(r2_mk);
+
+			if (r_mk < 1e-8) {
+				r_mk = 1e-8;
+			}
+
+			double denominator = r_mk * (1.0 + this->b * r_mk) * (1.0 + this->b * r_mk);
+			double factor = this->a / denominator;
+
+			grad_x_k += factor * dx_mk;
+			grad_y_k += factor * dy_mk;
+		}
+		gradSquared += (grad_x_k * grad_x_k) + (grad_y_k * grad_y_k);
+	}
+	return gradSquared;
+}
+
+//double DMC::potentialEnergy(int i) {
+//	double dx = walkers[i].position[0] - 0;
+//	double dy = walkers[i].position[1] - 0;
+//	double r = sqrt(dx * dx + dy * dy);
+//
+//	if (r < 1e-8) r = 1e-8;
+//
+//	return - 1 / r;
+//}
+
 double DMC::potentialEnergy(int i) {
-	double dx = walkers[i].position[0] - walkers[i].position[2];
-	double dy = walkers[i].position[1] - walkers[i].position[3];
-	double r = sqrt(dx * dx + dy * dy);
+	const double eps = 1e-8;
+	auto& position = walkers[i].position;
 
-	if (r < 1e-8) r = 1e-8;
+	double V = 0.0;
 
-	return - 1 / r;
+	for (int p = 0; p < nParticles; ++p) {
+		double xp = position[2 * p];
+		double yp = position[2 * p + 1];
+
+		for (int q = p + 1; q < nParticles; ++q) {
+			double dx = xp - position[2 * q];
+			double dy = yp - position[2 * q + 1];
+			double r2 = dx * dx + dy * dy;
+			double r = std::sqrt(r2);
+			if (r < eps) r = eps;
+
+			V += -1.0 / r;
+		}
+	}
+
+	return V;
 }
 
 
 void DMC::updateLocalEnergy(int i) {
-	walkers[i].localEnergy = - 0.5 * jastrowLaplacian(i) + potentialEnergy(i);
+	walkers[i].oldLocalEnergy = walkers[i].localEnergy;
+	walkers[i].localEnergy = - 0.5 * (jastrowLaplacian(i) - jastrowGradSquared(i)) + potentialEnergy(i);
 }
 
+//void DMC::updateDrift(int i) {
+//	double dx = walkers[i].position[0] - 0;
+//	double dy = walkers[i].position[1] - 0;
+//
+//	double r2 = dx * dx + dy * dy;
+//	double r = sqrt(r2);
+//	if (r < 1e-8) r = 1e-8;
+//
+//	double factor = a / (r * (1.0 + b * r) * (1.0 + b * r));
+//
+//	walkers[i].drift[0] = factor * dx;
+//	walkers[i].drift[1] = factor * dy;
+//}
+
 void DMC::updateDrift(int i) {
-	double dx = walkers[i].position[0] - walkers[i].position[2];
-	double dy = walkers[i].position[1] - walkers[i].position[3];
+	constexpr double eps = 1e-12;
+	auto& position = walkers[i].position;
+	auto& drift = walkers[i].drift;
+	std::fill(walkers[i].drift.begin(), walkers[i].drift.end(), 0.0);
 
-	double r2 = dx * dx + dy * dy;
-	double r = sqrt(r2);
-	if (r < 1e-8) r = 1e-8;
+	for (int k = 0; k < nParticles; ++k) {
+		for (int m = k + 1; m < nParticles; ++m) {
+			double dx = position[2 * k] - position[2 * m];
+			double dy = position[2 * k + 1] - position[2 * m + 1];
+			double r2 = dx * dx + dy * dy;
+			double r = std::sqrt(r2 < eps ? eps : r2);
+			double t = 1.0 + b * r;
+			double fac = a / (r * t * t);
 
-	double factor = a / (r * (1.0 + b * r) * (1.0 + b * r));
+			double fx = fac * dx;
+			double fy = fac * dy;
 
-	walkers[i].drift[0] = factor * dx;
-	walkers[i].drift[1] = factor * dy;
-
-	walkers[i].drift[2] = - factor * dx;
-	walkers[i].drift[3] = - factor * dy;
+			drift[2 * k] += fx;
+			drift[2 * k + 1] += fy;
+			drift[2 * m] -= fx;
+			drift[2 * m + 1] -= fy;
+		}
+	}
 }
 
 void DMC::timeStep() {
@@ -283,17 +348,21 @@ double DMC::meanLocalEnergy() const {
 	return (count > 0) ? sum / count : 0.0;
 }
 
-double DMC::referenceEnergy() const {
-	return meanLocalEnergy() - ((nWalkers - N_WALKERS_TARGET) / (N_WALKERS_TARGET * TAU));
+void DMC::updateReferenceEnergy() {
+	refEnergy = meanLocalEnergy();
 }
 
+void DMC::blockStep(int nSteps) {
+	double blockEnergy = 0.0;
 
-double DMC::trialWaveFunction(int i) {
-	double dx = walkers[i].position[0] - walkers[i].position[2];
-	double dy = walkers[i].position[1] - walkers[i].position[3];
-	double r = std::sqrt(dx * dx + dy * dy);
-	if (r < 1e-8) r = 1e-8;
+	for (int k = 0; k < nSteps; ++k) {
+		timeStep();              
+		blockEnergy += lastStepEnergy;
+	}
 
-	double exponent = a * r / (1.0 + b * r);
-	return std::exp(exponent);
+	refEnergy = blockEnergy / nSteps;
+}
+
+int DMC::getNumberWalkers() {
+	return nWalkers;
 }
