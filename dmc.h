@@ -4,6 +4,7 @@
 #include <random>
 #include <array>
 #include <deque>
+#include <omp.h>
 
 #include <iostream>
 #include <fstream>
@@ -39,9 +40,9 @@ class DMC {
         int nWalkers, nParticles, dim;
         double referenceEnergy, instEnergy, meanEnergy;
 
-        std::mt19937 gen;
-        std::normal_distribution<double> dist;
-        std::uniform_real_distribution<double> uniform;
+        std::vector<std::mt19937> gens;
+        // std::normal_distribution<double> dist;
+        // std::uniform_real_distribution<double> uniform;
 
         std::array<Walker, MAX_N_WALKERS> walkers;
 
@@ -51,7 +52,7 @@ class DMC {
 
         double getLocalEnergy(const std::vector<double>& position);
 
-        void updateReferenceEnergy();
+        void updateReferenceEnergy(double blockEnergy);
 
         // double potentialEnergy(int i) const;
 

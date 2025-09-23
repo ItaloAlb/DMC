@@ -13,11 +13,17 @@ DMC::DMC(int nWalkers_, int nParticles_, int dim_)
       dim(dim_),
       referenceEnergy(REFERENCE_ENERGY),
       instEnergy(0.0),
-      meanEnergy(0.0),
-      gen(std::random_device{}()),
-      dist(0.0, std::sqrt(TAU)),
-      uniform(0.0, 1.0) // [0, 1)
+      meanEnergy(0.0)
 {
+    int nThreads = omp_get_max_threads();
+    gens.resize(nThreads);
+
+    std::random_device rd;
+    for (int i = 0; i < nThreads; i++)
+    {
+        gens[i].seed(rd() + i);
+    }
+    
     initializeWalkers();
 }
 
@@ -28,74 +34,83 @@ void DMC::timeStep(){
     int newNWalkers = 0;
     // Accumulator for the total local energy of the new ensemble
     double ensembleEnergy = 0.0;
+    #pragma omp parallel reduction(+:ensembleEnergy)
+    {
+        int threadId = omp_get_thread_num();
+        auto& gen = gens[threadId];
+        std::normal_distribution<double> dist(0.0, std::sqrt(TAU));
+        std::uniform_real_distribution<double> uniform(0.0, 1.0);
 
-    // Iterate over each walker in the current ensemble
-    for(int i = 0; i < nWalkers; i++) {
-        // Create a new position vector, initialized with the current walker's position
-        std::vector<double> newPosition = walkers[i].position;
+        // Iterate over each walker in the current ensemble
+        #pragma omp for
+        for(int i = 0; i < nWalkers; i++) {
+            // Create a new position vector, initialized with the current walker's position
+            std::vector<double> newPosition = walkers[i].position;
 
-        // Propose a new position for the walker using a random walk step and drift term
-        for(int j = 0; j < nParticles * dim; j++){
-            double chi = dist(gen); // Random number from a normal distribution (diffusion term)
-            // Update the position component: newPosition = oldPosition + diffusion_term + drift_term * time_step
-            newPosition[j] += chi + TAU * walkers[i].drift[j];
-        }
-
-        // Calculate the trial wave function at the old and new positions
-        double oldPsi = trialWaveFunction(walkers[i].position);
-        double newPsi = trialWaveFunction(newPosition);
-
-        // Calculate the local energy at the old and new positions
-        double oldLocalEnergy = getLocalEnergy(walkers[i].position);
-        double newLocalEnergy = getLocalEnergy(newPosition);
-        
-        // Check if the proposed move crosses a nodal surface (where Psi changes sign)
-        // Moves that cross nodal surfaces are typically rejected in fixed-node DMC
-        bool crossedNodalSurface = (oldPsi > 0 && newPsi < 0) || (oldPsi < 0 && newPsi > 0);
-
-        // If the nodal surface is not crossed, proceed with the Metropolis-Hastings acceptance step
-        if (!crossedNodalSurface) {
-            // Calculate the drift at the new proposed position
-            std::vector<double> newDrift = getDrift(newPosition);
-            // Calculate the forward Green's function for the drift term
-            double forwardDriftGreenFunction = driftGreenFunction(newPosition, walkers[i].position, walkers[i].drift);
-            // Calculate the backward Green's function for the drift term
-            double backwardDriftGreenFunction = driftGreenFunction(walkers[i].position, newPosition, newDrift);
-
-            // Calculate the acceptance probability for the Metropolis-Hastings step
-            // This ensures that the walkers sample the distribution proportional to Psi^2
-            double acceptanceProbability = 
-            std::min(1.0, (backwardDriftGreenFunction * newPsi * newPsi) / (forwardDriftGreenFunction * oldPsi * oldPsi));
-            
-            // Accept or reject the proposed move based on the acceptance probability
-            if (uniform(gen) < acceptanceProbability) {
-                // If accepted, update the walker's position, drift, and local energy
-                walkers[i].position = newPosition;
-                walkers[i].drift = newDrift;
-                walkers[i].localEnergy = newLocalEnergy;
+            // Propose a new position for the walker using a random walk step and drift term
+            for(int j = 0; j < nParticles * dim; j++){
+                double chi = dist(gen); // Random number from a normal distribution (diffusion term)
+                // Update the position component: newPosition = oldPosition + diffusion_term + drift_term * time_step
+                newPosition[j] += chi + TAU * walkers[i].drift[j];
             }
-            // If rejected, the walker remains at its old position with its old drift and local energy
-        }
-        
-        // Determine the branching factor (number of copies of the walker)
-        // This is based on the local energy and the reference energy (implicitly via branchGreenFunction)
-        double eta = uniform(gen); // Random number for stochastic branching
-        // The branch factor determines how many copies of the walker are made
-        // It's typically an integer, calculated from the Green's function and a random number
-        double branchFactor = static_cast<int>(eta + branchGreenFunction(newLocalEnergy, oldLocalEnergy));
-        if (!std::isfinite(branchFactor)) {std::cerr << "[WARNING] branchFactor = " << branchFactor << std::endl;}
-        // If the branch factor is positive, create copies of the walker
-        if (branchFactor > 0) {
-            for(int n = 0; n < branchFactor; n++) {
-                if (newNWalkers >= MAX_N_WALKERS) {
-                    // if (newNWalkers >= MAX_N_WALKERS) {std::cerr << "[WARNING] Population = " << newNWalkers << std::endl;}
-                    break;
+
+            // Calculate the trial wave function at the old and new positions
+            double oldPsi = trialWaveFunction(walkers[i].position);
+            double newPsi = trialWaveFunction(newPosition);
+
+            // Calculate the local energy at the old and new positions
+            double oldLocalEnergy = getLocalEnergy(walkers[i].position);
+            double newLocalEnergy = getLocalEnergy(newPosition);
+            
+            // Check if the proposed move crosses a nodal surface (where Psi changes sign)
+            // Moves that cross nodal surfaces are typically rejected in fixed-node DMC
+            bool crossedNodalSurface = (oldPsi > 0 && newPsi < 0) || (oldPsi < 0 && newPsi > 0);
+
+            // If the nodal surface is not crossed, proceed with the Metropolis-Hastings acceptance step
+            if (!crossedNodalSurface) {
+                // Calculate the drift at the new proposed position
+                std::vector<double> newDrift = getDrift(newPosition);
+                // Calculate the forward Green's function for the drift term
+                double forwardDriftGreenFunction = driftGreenFunction(newPosition, walkers[i].position, walkers[i].drift);
+                // Calculate the backward Green's function for the drift term
+                double backwardDriftGreenFunction = driftGreenFunction(walkers[i].position, newPosition, newDrift);
+
+                // Calculate the acceptance probability for the Metropolis-Hastings step
+                // This ensures that the walkers sample the distribution proportional to Psi^2
+                double acceptanceProbability = 
+                std::min(1.0, (backwardDriftGreenFunction * newPsi * newPsi) / (forwardDriftGreenFunction * oldPsi * oldPsi));
+                
+                // Accept or reject the proposed move based on the acceptance probability
+                if (uniform(gen) < acceptanceProbability) {
+                    // If accepted, update the walker's position, drift, and local energy
+                    walkers[i].position = newPosition;
+                    walkers[i].drift = newDrift;
+                    walkers[i].localEnergy = newLocalEnergy;
                 }
-                // Add the local energy of the copied walker to the ensemble energy
-                ensembleEnergy += walkers[i].localEnergy;
-                // Add the copied walker to the new generation of walkers
-                newWalkers[newNWalkers] = walkers[i];
-                newNWalkers++;
+                // If rejected, the walker remains at its old position with its old drift and local energy
+            }
+            
+            // Determine the branching factor (number of copies of the walker)
+            // This is based on the local energy and the reference energy (implicitly via branchGreenFunction)
+            double eta = uniform(gen); // Random number for stochastic branching
+            // The branch factor determines how many copies of the walker are made
+            // It's typically an integer, calculated from the Green's function and a random number
+            double branchFactor = static_cast<int>(eta + branchGreenFunction(newLocalEnergy, oldLocalEnergy));
+            if (!std::isfinite(branchFactor)) {std::cerr << "[WARNING] branchFactor = " << branchFactor << std::endl;}
+            // If the branch factor is positive, create copies of the walker
+            if (branchFactor > 0) {
+                #pragma omp critical
+                for(int n = 0; n < branchFactor; n++) {
+                    if (newNWalkers >= MAX_N_WALKERS) {
+                        // if (newNWalkers >= MAX_N_WALKERS) {std::cerr << "[WARNING] Population = " << newNWalkers << std::endl;}
+                        break;
+                    }
+                    // Add the local energy of the copied walker to the ensemble energy
+                    ensembleEnergy += walkers[i].localEnergy;
+                    // Add the copied walker to the new generation of walkers
+                    newWalkers[newNWalkers] = walkers[i];
+                    newNWalkers++;
+                }
             }
         }
     }
@@ -113,10 +128,10 @@ void DMC::blockStep(int nSteps) {
     
 }
 
-void DMC::updateReferenceEnergy() {
+void DMC::updateReferenceEnergy(double blockEnergy) {
     double ratio = static_cast<double>(nWalkers) / static_cast<double>(N_WALKERS_TARGET);
     if (ratio < 1e-12) ratio = 1e-12;
-    referenceEnergy = referenceEnergy - ALPHA * std::log(ratio);
+    referenceEnergy = blockEnergy - ALPHA * std::log(ratio);
 }
 
 double DMC::driftGreenFunction(const std::vector<double>& newPosition,
@@ -208,7 +223,9 @@ void DMC::initializeWalkers() {
     // For simplicity and to directly address sampling from |Psi|^2,
     // we'll use a basic Metropolis-Hastings-like approach for initialization.
 
+    std::mt19937 gen = gens[0];
     std::normal_distribution<double> dist_(0.0, 1.0);
+    std::uniform_real_distribution<double> uniform(0.0, 1.0);
 
     const int nEquilibrationSteps = 100; // Number of Metropolis steps for equilibration
     const double stepSize = 0.5; // Step size for Metropolis proposal
@@ -252,16 +269,10 @@ void DMC::initializeWalkers() {
         walkers[i].position = currentPosition;
         // After equilibration, initialize drift and localEnergy for each walker
         walkers[i].drift = getDrift(walkers[i].position);
-        std::cout << "Walker " << i << " drift: ";
-        for (double d : walkers[i].drift) {
-            std::cout << d << " ";
-        }
-        std::cout << "\n";
         walkers[i].localEnergy = getLocalEnergy(walkers[i].position);
         instEnergy += walkers[i].localEnergy;
     }
     instEnergy = instEnergy / nWalkers;
-    std::cout << "Inst Energy = " << instEnergy << std::endl;
 }
 
 void DMC::run() {
@@ -271,8 +282,6 @@ void DMC::run() {
     std::ofstream fout("dmc.dat");
 
     std::deque<double> energyQueue;
-
-
 
     for(int j = 0; j < nBlockSteps; j++) {
         double blockEnergy = 0.0;
@@ -294,9 +303,8 @@ void DMC::run() {
         meanEnergy /= energyQueue.size();
 
         double ratio = static_cast<double>(nWalkers) / static_cast<double>(N_WALKERS_TARGET);
-        referenceEnergy = blockEnergy - ALPHA * std::log(ratio);
+        updateReferenceEnergy(blockEnergy);
 
-        // updateReferenceEnergy();
         fout << j << " "
              << blockEnergy << " "
              << referenceEnergy << " "
