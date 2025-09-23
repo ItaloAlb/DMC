@@ -1,4 +1,5 @@
 #include "dmc.h"
+using namespace Constants;
 
 Walker::Walker(int nParticles, int dim)
     : localEnergy(0.0)
@@ -96,14 +97,13 @@ void DMC::timeStep(){
             double eta = uniform(gen); // Random number for stochastic branching
             // The branch factor determines how many copies of the walker are made
             // It's typically an integer, calculated from the Green's function and a random number
-            double branchFactor = static_cast<int>(eta + branchGreenFunction(newLocalEnergy, oldLocalEnergy));
+            int branchFactor = static_cast<int>(eta + branchGreenFunction(newLocalEnergy, oldLocalEnergy));
+            branchFactor = std::min(branchFactor, MAX_BRANCH_FACTOR);
             // If the branch factor is positive, create copies of the walker
             if (branchFactor > 0) {
                 #pragma omp critical
                 for(int n = 0; n < branchFactor; n++) {
-                    if (newNWalkers >= MAX_N_WALKERS) {
-                        break;
-                    }
+                    if (newNWalkers >= MAX_N_WALKERS) break;
                     // Add the local energy of the copied walker to the ensemble energy
                     ensembleEnergy += walkers[i].localEnergy;
                     // Add the copied walker to the new generation of walkers
@@ -115,7 +115,6 @@ void DMC::timeStep(){
     }
     
     // Update the instantaneous energy of the ensemble
-    if (newNWalkers == 0) {std::cerr << "[WARNING] Population = " << newNWalkers << std::endl;}
     instEnergy = newNWalkers > 0 ? ensembleEnergy / newNWalkers: 0.0;
     // Replace the old generation of walkers with the new generation
     walkers = newWalkers;
@@ -129,7 +128,7 @@ void DMC::blockStep(int nSteps) {
 
 void DMC::updateReferenceEnergy(double blockEnergy) {
     double ratio = static_cast<double>(nWalkers) / static_cast<double>(N_WALKERS_TARGET);
-    if (ratio < 1e-12) ratio = 1e-12;
+    if (ratio < MIN_POPULATION_RATIO) ratio = MIN_POPULATION_RATIO;
     referenceEnergy = blockEnergy - ALPHA * std::log(ratio);
 }
 
@@ -160,36 +159,34 @@ double DMC::branchGreenFunction(double newLocalEnergy,
 std::vector<double> DMC::getDrift(const std::vector<double>& position) const {
     int d = nParticles * dim;
     std::vector<double> drift(d, 0.0);
-    double h = 1e-6;
     for (int i = 0; i < d; i++) {
         std::vector<double> Rp = position, Rm = position;
-        Rp[i] += h;
-        Rm[i] -= h;
+        Rp[i] += FINITE_DIFFERENCE_STEP;
+        Rm[i] -= FINITE_DIFFERENCE_STEP;
         double forwardPsi = std::log(std::abs(trialWaveFunction(Rp)));
         double backwardPsi = std::log(std::abs(trialWaveFunction(Rm)));
 
         double lnDiff = forwardPsi - backwardPsi;
-        drift[i] = lnDiff / (2.0 * h);
+        drift[i] = lnDiff / (2.0 * FINITE_DIFFERENCE_STEP);
     }
     return drift;
 }
 
 double DMC::getLocalEnergy(const std::vector<double>& position) {
     int d = nParticles * dim;
-    double h = 1e-8;
     double lap = - 2 * d * std::log(std::abs(trialWaveFunction(position)));
     double grad = 0.0;
     for (int i = 0; i < d; i++) {
         std::vector<double> Rp = position, Rm = position;
-        Rp[i] += h;
-        Rm[i] -= h;
+        Rp[i] += FINITE_DIFFERENCE_STEP;
+        Rm[i] -= FINITE_DIFFERENCE_STEP;
         double forwardPsi = std::log(std::abs(trialWaveFunction(Rp)));
         double backwardPsi = std::log(std::abs(trialWaveFunction(Rm)));
-        double diff = std::abs((forwardPsi - backwardPsi) / (2.0 * h));
+        double diff = std::abs((forwardPsi - backwardPsi) / (2.0 * FINITE_DIFFERENCE_STEP));
         grad += diff * diff;
         lap += forwardPsi + backwardPsi;
     }
-    lap = lap / (h * h);
+    lap = lap / (FINITE_DIFFERENCE_STEP_2);
     return - 0.5 * (lap + grad) + potentialEnergy(position);
 }
 
@@ -199,7 +196,7 @@ double DMC::potentialEnergy(const std::vector<double>& position) const {
     double dx2 = dx * dx;
     double dy2 = dy * dy;
     double r = std::sqrt(dx2 + dy2);
-    if (r < 1e-2) r = 1e-2;
+    if (r < MIN_DISTANCE) r = MIN_DISTANCE;
     return -1.0 / r;
 }
 
@@ -209,12 +206,11 @@ double DMC::trialWaveFunction(const std::vector<double>& position) const {
     double dx2 = dx * dx;
     double dy2 = dy * dy;
     double r = std::sqrt(dx2 + dy2);
-    if (r < 1e-8) r = 1e-2;
+    if (r < MIN_DISTANCE) r = MIN_DISTANCE;
     double r2 = r * r;
-    double c1 = 1.0;
+    double c1 = 0.25;
     double c2 = 1.0;
     double c3 = 1.0;
-    // return  - c1 * r / (1 - c2 * r);
     return c1 * r2 * std::log(r) * std::exp(- c2 * r2) - c3 * r * (1 - std::exp(- c2 * r2));
 }
 

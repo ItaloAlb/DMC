@@ -18,18 +18,21 @@
 #include <fstream>
 #include <iomanip>
 
-const int MAX_N_WALKERS = 15000;
-const int N_WALKERS_TARGET = 5000;
+namespace Constants {
+    const int MAX_N_WALKERS = 15000;
+    const int N_WALKERS_TARGET = 5000;
+    const int MAX_BRANCH_FACTOR = 3;
+    const int DEFAULT_N_PARTICLE = 2;
+    const int DEFAULT_N_DIM = 2;
 
-const double ELECTRON_CHARGE = -1.0;
-const double ELECTRON_MASS = 1.0;
+    const double REFERENCE_ENERGY = -0.5;
+    const double ALPHA = 0.5;
 
-const double HOLE_CHARGE = +1.0;
-const double HOLE_MASS = 1.0;
-
-const double REFERENCE_ENERGY = -0.5;
-const double ALPHA = 0.5;
-const int MAX_BRANCH = 3.0;
+    const double MIN_POPULATION_RATIO = 1e-8;
+    const double MIN_DISTANCE = 1e-8;
+    const double FINITE_DIFFERENCE_STEP = 1e-8;
+    const double FINITE_DIFFERENCE_STEP_2 = FINITE_DIFFERENCE_STEP * FINITE_DIFFERENCE_STEP;
+}
 
 struct Walker {
         std::vector<double> position;
@@ -50,7 +53,7 @@ class DMC {
         // std::normal_distribution<double> dist;
         // std::uniform_real_distribution<double> uniform;
 
-        std::array<Walker, MAX_N_WALKERS> walkers;
+        std::array<Walker, Constants::MAX_N_WALKERS> walkers;
 
         void initializeWalkers();
 
@@ -75,7 +78,10 @@ class DMC {
         void blockStep(int nSteps);
 
     public: 
-        DMC(double deltaTau, int nWalkers = 5000, int nParticles = 2, int dim = 2);
+        DMC(double deltaTau, 
+            int nWalkers = Constants::N_WALKERS_TARGET, 
+            int nParticles = Constants::DEFAULT_N_PARTICLE, 
+            int dim = Constants::DEFAULT_N_DIM);
 
         void run();
         
