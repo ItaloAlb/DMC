@@ -7,8 +7,9 @@ Walker::Walker(int nParticles, int dim)
 	drift.resize(nParticles * dim, 0.0);
 }
 
-DMC::DMC(int nWalkers_, int nParticles_, int dim_)
-    : nWalkers(nWalkers_) ,
+DMC::DMC(double deltaTau_, int nWalkers_, int nParticles_, int dim_)
+    : deltaTau(deltaTau_),
+      nWalkers(nWalkers_) ,
       nParticles(nParticles_),
       dim(dim_),
       referenceEnergy(REFERENCE_ENERGY),
@@ -38,7 +39,7 @@ void DMC::timeStep(){
     {
         int threadId = omp_get_thread_num();
         auto& gen = gens[threadId];
-        std::normal_distribution<double> dist(0.0, std::sqrt(TAU));
+        std::normal_distribution<double> dist(0.0, std::sqrt(deltaTau));
         std::uniform_real_distribution<double> uniform(0.0, 1.0);
 
         // Iterate over each walker in the current ensemble
@@ -51,7 +52,7 @@ void DMC::timeStep(){
             for(int j = 0; j < nParticles * dim; j++){
                 double chi = dist(gen); // Random number from a normal distribution (diffusion term)
                 // Update the position component: newPosition = oldPosition + diffusion_term + drift_term * time_step
-                newPosition[j] += chi + TAU * walkers[i].drift[j];
+                newPosition[j] += chi + deltaTau * walkers[i].drift[j];
             }
 
             // Calculate the trial wave function at the old and new positions
@@ -96,13 +97,11 @@ void DMC::timeStep(){
             // The branch factor determines how many copies of the walker are made
             // It's typically an integer, calculated from the Green's function and a random number
             double branchFactor = static_cast<int>(eta + branchGreenFunction(newLocalEnergy, oldLocalEnergy));
-            if (!std::isfinite(branchFactor)) {std::cerr << "[WARNING] branchFactor = " << branchFactor << std::endl;}
             // If the branch factor is positive, create copies of the walker
             if (branchFactor > 0) {
                 #pragma omp critical
                 for(int n = 0; n < branchFactor; n++) {
                     if (newNWalkers >= MAX_N_WALKERS) {
-                        // if (newNWalkers >= MAX_N_WALKERS) {std::cerr << "[WARNING] Population = " << newNWalkers << std::endl;}
                         break;
                     }
                     // Add the local energy of the copied walker to the ensemble energy
@@ -141,13 +140,13 @@ double DMC::driftGreenFunction(const std::vector<double>& newPosition,
     // Δ = (R - R' - τ v_D(R'))
     double norm2 = 0.0;
     for (int j = 0; j < d; j++) {
-        double diff = newPosition[j] - oldPosition[j] - TAU * oldDrift[j];
+        double diff = newPosition[j] - oldPosition[j] - deltaTau * oldDrift[j];
         norm2 += diff * diff;
     }
     // 1 / (2πτ)^(N/2)
-    double factor = 1.0 / std::pow(2.0 * M_PI * TAU, 0.5 * d);
+    double factor = 1.0 / std::pow(2.0 * M_PI * deltaTau, 0.5 * d);
 
-    double exponent = - norm2 / (2.0 * TAU);
+    double exponent = - norm2 / (2.0 * deltaTau);
     // 1 / (2πτ)^(N/2) * exp(-Δ / (2 * τ))
     return factor * std::exp(exponent);
 }
@@ -155,7 +154,7 @@ double DMC::driftGreenFunction(const std::vector<double>& newPosition,
 double DMC::branchGreenFunction(double newLocalEnergy,
                                 double oldLocalEnergy) const {
     // exp(- τ/2 [E_L(R) + E_L(R') - 2E_T])
-    return std::exp(- 0.5 * TAU * (newLocalEnergy + oldLocalEnergy - 2.0 * referenceEnergy));
+    return std::exp(- 0.5 * deltaTau * (newLocalEnergy + oldLocalEnergy - 2.0 * referenceEnergy));
 }
 
 std::vector<double> DMC::getDrift(const std::vector<double>& position) const {

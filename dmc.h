@@ -1,3 +1,11 @@
+//////////////////////////////////////////////////////////////
+//                                                          //
+// g++ -std=c++17 -fopenmp -g -o dmc main.cpp dmc.cpp       //
+// ./dmc [to run with parallelization]                      //
+// OMP_NUM_THREADS=1 ./dmc [to run without parallelization] //
+//                                                          //
+//////////////////////////////////////////////////////////////
+
 #include <vector>
 #define _USE_MATH_DEFINES
 #include <cmath>
@@ -9,8 +17,6 @@
 #include <iostream>
 #include <fstream>
 #include <iomanip>
-
-const double TAU = 0.01;
 
 const int MAX_N_WALKERS = 15000;
 const int N_WALKERS_TARGET = 5000;
@@ -38,7 +44,7 @@ struct Walker {
 class DMC {
     private:
         int nWalkers, nParticles, dim;
-        double referenceEnergy, instEnergy, meanEnergy;
+        double deltaTau, referenceEnergy, instEnergy, meanEnergy;
 
         std::vector<std::mt19937> gens;
         // std::normal_distribution<double> dist;
@@ -69,7 +75,7 @@ class DMC {
         void blockStep(int nSteps);
 
     public: 
-        DMC(int nWalkers = 5000, int nParticles = 2, int dim = 2);
+        DMC(double deltaTau, int nWalkers = 5000, int nParticles = 2, int dim = 2);
 
         void run();
         
