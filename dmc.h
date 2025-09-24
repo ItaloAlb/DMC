@@ -19,9 +19,9 @@
 #include <iomanip>
 
 namespace Constants {
-    const int MAX_N_WALKERS = 15000;
-    const int N_WALKERS_TARGET = 5000;
-    const int MAX_BRANCH_FACTOR = 3;
+    const int MAX_N_WALKERS = 100000;
+    const int N_WALKERS_TARGET = 50000;
+    const int MAX_BRANCH_FACTOR = 2;
     const int DEFAULT_N_PARTICLE = 2;
     const int DEFAULT_N_DIM = 2;
 
@@ -34,44 +34,46 @@ namespace Constants {
     const double FINITE_DIFFERENCE_STEP_2 = FINITE_DIFFERENCE_STEP * FINITE_DIFFERENCE_STEP;
 }
 
-struct Walker {
-        std::vector<double> position;
-        std::vector<double> drift;
-        double localEnergy;
+// struct Walker {
+//         std::vector<double> position;
+//         std::vector<double> drift;
+//         double localEnergy;
 
-        Walker() = default;
+//         Walker() = default;
 
-        Walker(int nParticles, int dim);
-};
+//         Walker(int nParticles, int dim);
+// };
 
 class DMC {
     private:
-        int nWalkers, nParticles, dim;
+        int nWalkers, nParticles, dim, stride;
         double deltaTau, referenceEnergy, instEnergy, meanEnergy;
 
         std::vector<std::mt19937> gens;
         // std::normal_distribution<double> dist;
         // std::uniform_real_distribution<double> uniform;
 
-        std::array<Walker, Constants::MAX_N_WALKERS> walkers;
+        std::vector<double> positions;
+        std::vector<double> drifts;
+        std::vector<double> localEnergy;
 
         void initializeWalkers();
 
-        std::vector<double> getDrift(const std::vector<double>& position) const;
+        std::vector<double> getDrift(const double* position) const;
 
-        double getLocalEnergy(const std::vector<double>& position);
+        double getLocalEnergy(const double* position);
 
         void updateReferenceEnergy(double blockEnergy);
 
         // double potentialEnergy(int i) const;
 
-        double potentialEnergy(const std::vector<double>& position) const;
+        double potentialEnergy(const double* position) const;
 
-        double driftGreenFunction(const std::vector<double>& newPosition, const std::vector<double>& oldPosition, const std::vector<double>& oldDrift) const;
+        double driftGreenFunction(const double* newPosition, const double* oldPosition, const double* oldDrift) const;
 
         double branchGreenFunction(double newLocalEnergy, double oldLocalEnergy) const;
         
-        double trialWaveFunction(const std::vector<double>& position) const;
+        double trialWaveFunction(const double* position) const;
 
         void timeStep();
 

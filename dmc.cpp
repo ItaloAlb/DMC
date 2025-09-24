@@ -1,12 +1,12 @@
 #include "dmc.h"
 using namespace Constants;
 
-Walker::Walker(int nParticles, int dim)
-    : localEnergy(0.0)
-{
-    position.resize(nParticles * dim, 0.0);
-	drift.resize(nParticles * dim, 0.0);
-}
+// Walker::Walker(int nParticles, int dim)
+//     : localEnergy(0.0)
+// {
+//     position.resize(nParticles * dim, 0.0);
+// 	drift.resize(nParticles * dim, 0.0);
+// }
 
 DMC::DMC(double deltaTau_, int nWalkers_, int nParticles_, int dim_)
     : deltaTau(deltaTau_),
@@ -17,6 +17,13 @@ DMC::DMC(double deltaTau_, int nWalkers_, int nParticles_, int dim_)
       instEnergy(0.0),
       meanEnergy(0.0)
 {
+
+    positions.resize(nWalkers_ * nParticles_ * dim_);
+    drifts.resize(nWalkers_ * nParticles_* dim_);
+    localEnergy.resize(nWalkers_);
+
+    stride = nParticles_* dim_;
+
     int nThreads = omp_get_max_threads();
     gens.resize(nThreads);
 
@@ -31,7 +38,9 @@ DMC::DMC(double deltaTau_, int nWalkers_, int nParticles_, int dim_)
 
 void DMC::timeStep(){
     // Create a temporary array to store the new generation of walkers
-    std::array<Walker, MAX_N_WALKERS> newWalkers;
+    std::vector<double> newPositions(MAX_N_WALKERS * stride);
+    std::vector<double> newDrifts(MAX_N_WALKERS * stride);
+    std::vector<double> newLocalEnergies(MAX_N_WALKERS);
     // Counter for the number of walkers in the new generation
     int newNWalkers = 0;
     // Accumulator for the total local energy of the new ensemble
@@ -46,36 +55,36 @@ void DMC::timeStep(){
         // Iterate over each walker in the current ensemble
         #pragma omp for
         for(int i = 0; i < nWalkers; i++) {
-            // Create a new position vector, initialized with the current walker's position
-            std::vector<double> newPosition = walkers[i].position;
-
+            std::vector<double> newPosition(stride);
             // Propose a new position for the walker using a random walk step and drift term
-            for(int j = 0; j < nParticles * dim; j++){
+            for(int j = 0; j < stride; j++){
                 double chi = dist(gen); // Random number from a normal distribution (diffusion term)
                 // Update the position component: newPosition = oldPosition + diffusion_term + drift_term * time_step
-                newPosition[j] += chi + deltaTau * walkers[i].drift[j];
+                newPosition[j] = positions[i * stride + j] + chi + deltaTau * drifts[i * stride + j];
             }
 
             // Calculate the trial wave function at the old and new positions
-            double oldPsi = trialWaveFunction(walkers[i].position);
-            double newPsi = trialWaveFunction(newPosition);
+            double oldPsi = trialWaveFunction(&positions[i * stride]);
+            double newPsi = trialWaveFunction(&newPosition[0]);
 
             // Calculate the local energy at the old and new positions
-            double oldLocalEnergy = getLocalEnergy(walkers[i].position);
-            double newLocalEnergy = getLocalEnergy(newPosition);
+            double oldLocalEnergy = getLocalEnergy(&positions[i * stride]); 
+            double newLocalEnergy = getLocalEnergy(&newPosition[0]);
             
             // Check if the proposed move crosses a nodal surface (where Psi changes sign)
             // Moves that cross nodal surfaces are typically rejected in fixed-node DMC
             bool crossedNodalSurface = (oldPsi > 0 && newPsi < 0) || (oldPsi < 0 && newPsi > 0);
 
             // If the nodal surface is not crossed, proceed with the Metropolis-Hastings acceptance step
+            std::vector<double> newDrift(stride); // Declare newDrift here
+            // If the nodal surface is not crossed, proceed with the Metropolis-Hastings acceptance step
             if (!crossedNodalSurface) {
                 // Calculate the drift at the new proposed position
-                std::vector<double> newDrift = getDrift(newPosition);
+                newDrift = getDrift(&newPosition[0]);
                 // Calculate the forward Green's function for the drift term
-                double forwardDriftGreenFunction = driftGreenFunction(newPosition, walkers[i].position, walkers[i].drift);
+                double forwardDriftGreenFunction = driftGreenFunction(&newPosition[0], &positions[i * stride], &drifts[i * stride]);
                 // Calculate the backward Green's function for the drift term
-                double backwardDriftGreenFunction = driftGreenFunction(walkers[i].position, newPosition, newDrift);
+                double backwardDriftGreenFunction = driftGreenFunction(&positions[i * stride], &newPosition[0], &newDrift[0]);
 
                 // Calculate the acceptance probability for the Metropolis-Hastings step
                 // This ensures that the walkers sample the distribution proportional to Psi^2
@@ -85,9 +94,11 @@ void DMC::timeStep(){
                 // Accept or reject the proposed move based on the acceptance probability
                 if (uniform(gen) < acceptanceProbability) {
                     // If accepted, update the walker's position, drift, and local energy
-                    walkers[i].position = newPosition;
-                    walkers[i].drift = newDrift;
-                    walkers[i].localEnergy = newLocalEnergy;
+                    for (int j = 0; j < stride; j++) {
+                        positions[i * stride + j] = newPosition[j];
+                        drifts[i * stride + j] = newDrift[j];
+                    }
+                    localEnergy[i] = newLocalEnergy;
                 }
                 // If rejected, the walker remains at its old position with its old drift and local energy
             }
@@ -102,22 +113,38 @@ void DMC::timeStep(){
             // If the branch factor is positive, create copies of the walker
             if (branchFactor > 0) {
                 #pragma omp critical
-                for(int n = 0; n < branchFactor; n++) {
+                for (int n = 0; n < branchFactor; n++) {
                     if (newNWalkers >= MAX_N_WALKERS) break;
-                    // Add the local energy of the copied walker to the ensemble energy
-                    ensembleEnergy += walkers[i].localEnergy;
-                    // Add the copied walker to the new generation of walkers
-                    newWalkers[newNWalkers] = walkers[i];
+
+                    ensembleEnergy += localEnergy[i];
+
+                    std::copy(newPosition.begin(),
+                            newPosition.end(),
+                            newPositions.begin() + newNWalkers * stride);
+
+                    std::copy(newDrift.begin(),
+                            newDrift.end(),
+                            newDrifts.begin() + newNWalkers * stride);
+
+                    newLocalEnergies[newNWalkers] = newLocalEnergy;
+
                     newNWalkers++;
                 }
             }
         }
     }
+
+
     
     // Update the instantaneous energy of the ensemble
     instEnergy = newNWalkers > 0 ? ensembleEnergy / newNWalkers: 0.0;
     // Replace the old generation of walkers with the new generation
-    walkers = newWalkers;
+    positions.assign(newPositions.begin(),
+                     newPositions.begin() + newNWalkers * stride);
+    drifts.assign(newDrifts.begin(),
+                  newDrifts.begin() + newNWalkers * stride);
+    localEnergy.assign(newLocalEnergies.begin(),
+                       newLocalEnergies.begin() + newNWalkers);
     // Update the total number of walkers
     nWalkers = newNWalkers;
 }
@@ -132,18 +159,17 @@ void DMC::updateReferenceEnergy(double blockEnergy) {
     referenceEnergy = blockEnergy - ALPHA * std::log(ratio);
 }
 
-double DMC::driftGreenFunction(const std::vector<double>& newPosition,
-                               const std::vector<double>& oldPosition,
-                               const std::vector<double>& oldDrift) const {
-    int d = nParticles * dim;
+double DMC::driftGreenFunction(const double* newPosition, 
+                               const double* oldPosition, 
+                               const double* oldDrift) const {
     // Δ = (R - R' - τ v_D(R'))
     double norm2 = 0.0;
-    for (int j = 0; j < d; j++) {
+    for (int j = 0; j < stride; j++) {
         double diff = newPosition[j] - oldPosition[j] - deltaTau * oldDrift[j];
         norm2 += diff * diff;
     }
     // 1 / (2πτ)^(N/2)
-    double factor = 1.0 / std::pow(2.0 * M_PI * deltaTau, 0.5 * d);
+    double factor = 1.0 / std::pow(2.0 * M_PI * deltaTau, 0.5 * stride);
 
     double exponent = - norm2 / (2.0 * deltaTau);
     // 1 / (2πτ)^(N/2) * exp(-Δ / (2 * τ))
@@ -156,15 +182,15 @@ double DMC::branchGreenFunction(double newLocalEnergy,
     return std::exp(- 0.5 * deltaTau * (newLocalEnergy + oldLocalEnergy - 2.0 * referenceEnergy));
 }
 
-std::vector<double> DMC::getDrift(const std::vector<double>& position) const {
-    int d = nParticles * dim;
-    std::vector<double> drift(d, 0.0);
-    for (int i = 0; i < d; i++) {
-        std::vector<double> Rp = position, Rm = position;
+std::vector<double> DMC::getDrift(const double* position) const {
+    std::vector<double> drift(stride, 0.0);
+    for (int i = 0; i < stride; i++) {
+        std::vector<double> Rp(position, position + stride);
+        std::vector<double> Rm(position, position + stride);
         Rp[i] += FINITE_DIFFERENCE_STEP;
         Rm[i] -= FINITE_DIFFERENCE_STEP;
-        double forwardPsi = std::log(std::abs(trialWaveFunction(Rp)));
-        double backwardPsi = std::log(std::abs(trialWaveFunction(Rm)));
+        double forwardPsi = std::log(std::abs(trialWaveFunction(&Rp[0])));
+        double backwardPsi = std::log(std::abs(trialWaveFunction(&Rm[0])));
 
         double lnDiff = forwardPsi - backwardPsi;
         drift[i] = lnDiff / (2.0 * FINITE_DIFFERENCE_STEP);
@@ -172,25 +198,25 @@ std::vector<double> DMC::getDrift(const std::vector<double>& position) const {
     return drift;
 }
 
-double DMC::getLocalEnergy(const std::vector<double>& position) {
-    int d = nParticles * dim;
-    double lap = - 2 * d * std::log(std::abs(trialWaveFunction(position)));
+double DMC::getLocalEnergy(const double* position) {
+    double lap = - 2 * stride * std::log(std::abs(trialWaveFunction(position)));
     double grad = 0.0;
-    for (int i = 0; i < d; i++) {
-        std::vector<double> Rp = position, Rm = position;
+    for (int i = 0; i < stride; i++) {
+        std::vector<double> Rp(position, position + stride);
+        std::vector<double> Rm(position, position + stride);
         Rp[i] += FINITE_DIFFERENCE_STEP;
         Rm[i] -= FINITE_DIFFERENCE_STEP;
-        double forwardPsi = std::log(std::abs(trialWaveFunction(Rp)));
-        double backwardPsi = std::log(std::abs(trialWaveFunction(Rm)));
+        double forwardPsi = std::log(std::abs(trialWaveFunction(&Rp[0])));
+        double backwardPsi = std::log(std::abs(trialWaveFunction(&Rm[0])));
         double diff = std::abs((forwardPsi - backwardPsi) / (2.0 * FINITE_DIFFERENCE_STEP));
         grad += diff * diff;
         lap += forwardPsi + backwardPsi;
     }
     lap = lap / (FINITE_DIFFERENCE_STEP_2);
-    return - 0.5 * (lap + grad) + potentialEnergy(position);
+    return - 0.5 * (lap + grad) + potentialEnergy(&position[0]);
 }
 
-double DMC::potentialEnergy(const std::vector<double>& position) const {
+double DMC::potentialEnergy(const double* position) const {
     double dx = position[0] - position[2];
     double dy = position[1] - position[3];
     double dx2 = dx * dx;
@@ -200,7 +226,7 @@ double DMC::potentialEnergy(const std::vector<double>& position) const {
     return -1.0 / r;
 }
 
-double DMC::trialWaveFunction(const std::vector<double>& position) const {
+double DMC::trialWaveFunction(const double* position) const {
     double dx = position[0] - position[2];
     double dy = position[1] - position[3];
     double dx2 = dx * dx;
@@ -228,44 +254,45 @@ void DMC::initializeWalkers() {
 
     
     for (int i = 0; i < nWalkers; ++i) {
-        walkers[i].position.resize(nParticles * dim, 0.0);
-        walkers[i].drift.resize(nParticles * dim, 0.0);
-
         // Start with random positions for all walkers
         for (int j = 0; j < nParticles * dim; ++j) {
-            walkers[i].position[j] = 2 * uniform(gen) * L - L;
+            positions[i * stride + j] = 2 * uniform(gen) * L - L;
         }
 
-        std::vector<double> currentPosition = walkers[i].position;
-        double currentPsiSquared = trialWaveFunction(currentPosition);
+        std::vector<double> currentPosition(positions.begin() + i * stride, positions.begin() + (i + 1) * stride);
+        double currentPsiSquared = trialWaveFunction(&currentPosition[0]);
         currentPsiSquared *= currentPsiSquared;
 
         // Now, equilibrate these walkers to sample from |Psi|^2 using Metropolis-Hastings
         for (int step = 0; step < nEquilibrationSteps; ++step) {
             // Propose a new position
-            std::vector<double> proposedPosition = currentPosition;
+            std::vector<double> proposedPosition(positions.begin() + i * stride, positions.begin() + (i + 1) * stride);
             for (int j = 0; j < nParticles * dim; ++j) {
                 proposedPosition[j] += dist_(gen) * stepSize; // Random walk step
             }
 
-            double proposedPsiSquared = trialWaveFunction(proposedPosition);
+            double proposedPsiSquared = trialWaveFunction(&proposedPosition[0]);
             proposedPsiSquared *= proposedPsiSquared;
 
             // Acceptance probability
             double acceptanceRatio = proposedPsiSquared / currentPsiSquared;
 
             if (uniform(gen) < std::min(1.0, acceptanceRatio)) {
-                currentPosition = proposedPosition;
+                for (int j = 0; j < nParticles * dim; ++j) {
+                    currentPosition[j] = proposedPosition[j];
+                }
+                // currentPosition = proposedPosition;
                 currentPsiSquared = proposedPsiSquared;
             }
             // If rejected, walker stays at currentPosition
         }
 
-        walkers[i].position = currentPosition;
+        std::copy(currentPosition.begin(), currentPosition.end(), positions.begin() + i * stride);
         // After equilibration, initialize drift and localEnergy for each walker
-        walkers[i].drift = getDrift(walkers[i].position);
-        walkers[i].localEnergy = getLocalEnergy(walkers[i].position);
-        instEnergy += walkers[i].localEnergy;
+        std::vector<double> drift = getDrift(&positions[i * stride]);
+        std::copy(drift.begin(), drift.end(), drifts.begin() + i * stride);
+        localEnergy[i] = getLocalEnergy(&positions[i * stride]);
+        instEnergy += localEnergy[i];
     }
     instEnergy = instEnergy / nWalkers;
 }
