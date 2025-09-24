@@ -1,10 +1,10 @@
-//////////////////////////////////////////////////////////////
-//                                                          //
-// g++ -std=c++17 -fopenmp -g -o dmc main.cpp dmc.cpp       //
-// ./dmc [to run with parallelization]                      //
-// OMP_NUM_THREADS=1 ./dmc [to run without parallelization] //
-//                                                          //
-//////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////
+//// g++ -std=c++17 -fopenmp -g -o dmc main.cpp dmc.cpp       ////
+//// ./dmc [to run with parallelization]                      ////
+//// OMP_NUM_THREADS=1 ./dmc [to run without parallelization] ////
+//////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////
 
 #include <vector>
 #define _USE_MATH_DEFINES
@@ -20,13 +20,13 @@
 
 namespace Constants {
     const int MAX_N_WALKERS = 100000;
-    const int N_WALKERS_TARGET = 50000;
+    const int N_WALKERS_TARGET = 10000;
     const int MAX_BRANCH_FACTOR = 2;
     const int DEFAULT_N_PARTICLE = 2;
     const int DEFAULT_N_DIM = 2;
 
-    const double REFERENCE_ENERGY = -0.5;
-    const double ALPHA = 0.5;
+    const double REFERENCE_ENERGY = -1.0;
+    const double ALPHA = 5.0;
 
     const double MIN_POPULATION_RATIO = 1e-8;
     const double MIN_DISTANCE = 1e-8;

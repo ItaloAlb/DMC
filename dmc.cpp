@@ -118,14 +118,8 @@ void DMC::timeStep(){
 
                     ensembleEnergy += localEnergy[i];
 
-                    std::copy(newPosition.begin(),
-                            newPosition.end(),
-                            newPositions.begin() + newNWalkers * stride);
-
-                    std::copy(newDrift.begin(),
-                            newDrift.end(),
-                            newDrifts.begin() + newNWalkers * stride);
-
+                    std::copy(newPosition.begin(), newPosition.end(), newPositions.begin() + newNWalkers * stride);
+                    std::copy(newDrift.begin(), newDrift.end(), newDrifts.begin() + newNWalkers * stride);
                     newLocalEnergies[newNWalkers] = newLocalEnergy;
 
                     newNWalkers++;
@@ -134,17 +128,12 @@ void DMC::timeStep(){
         }
     }
 
-
-    
     // Update the instantaneous energy of the ensemble
     instEnergy = newNWalkers > 0 ? ensembleEnergy / newNWalkers: 0.0;
     // Replace the old generation of walkers with the new generation
-    positions.assign(newPositions.begin(),
-                     newPositions.begin() + newNWalkers * stride);
-    drifts.assign(newDrifts.begin(),
-                  newDrifts.begin() + newNWalkers * stride);
-    localEnergy.assign(newLocalEnergies.begin(),
-                       newLocalEnergies.begin() + newNWalkers);
+    positions.assign(newPositions.begin(), newPositions.begin() + newNWalkers * stride);
+    drifts.assign(newDrifts.begin(), newDrifts.begin() + newNWalkers * stride);
+    localEnergy.assign(newLocalEnergies.begin(), newLocalEnergies.begin() + newNWalkers);
     // Update the total number of walkers
     nWalkers = newNWalkers;
 }
@@ -235,9 +224,9 @@ double DMC::trialWaveFunction(const double* position) const {
     if (r < MIN_DISTANCE) r = MIN_DISTANCE;
     double r2 = r * r;
     double c1 = 0.25;
-    double c2 = 1.0;
-    double c3 = 1.0;
-    return c1 * r2 * std::log(r) * std::exp(- c2 * r2) - c3 * r * (1 - std::exp(- c2 * r2));
+    double c2 = 63.0;
+    double c3 = 0.59;
+    return std::exp(c1 * r2 * std::log(r) * std::exp(- c2 * r2) - c3 * r * (1 - std::exp(- c2 * r2)));
 }
 
 void DMC::initializeWalkers() {
@@ -295,11 +284,12 @@ void DMC::initializeWalkers() {
         instEnergy += localEnergy[i];
     }
     instEnergy = instEnergy / nWalkers;
+    std::cout << "inst Energy: " << instEnergy << std::endl;
 }
 
 void DMC::run() {
-    int nBlockSteps = 300;
-    int nStepsPerBlock = 50;
+    int nBlockSteps = 300 * 5;
+    int nStepsPerBlock = 10;
 
     std::ofstream fout("dmc.dat");
 

@@ -45,9 +45,10 @@ if __name__ == "__main__":
         plot_energies(filename)
         plot_population(filename)
 
-    elif len(sys.argv) == 2:
+    elif len(sys.argv) == 3:
         func = sys.argv[1]
-
+        filename = sys.argv[2]
+        
         if func == "energy":
             plot_energies(filename)
         elif func == "population":
